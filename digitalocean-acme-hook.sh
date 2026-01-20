@@ -232,7 +232,7 @@ get_tokens() {
 }
 
 # https://docs.digitalocean.com/reference/api/digitalocean/#tag/Domain-Records/operation/domains_create_record
-# TTL must be over 30, and skip any null values
+# TTL must be over 30, and don't send null values
 deploy_record() {
   echo -n '{
     "type": "TXT",
@@ -243,14 +243,25 @@ deploy_record() {
 }
 
 clean_record() {
-  request GET "${url}/records" ""
-  mapfile -t _deletion_ids < <(<<< "${res}" jq -r ".domain_records[] | select(.name|startswith('${name}')) | .id")
-  mapfile -t _deletion_names < <(<<< "${res}" jq -r ".domain_records[] | select(.name|startswith('${name}')) | .name")
-  debug "Got IDs to delete: ${_deletion_ids} for names ${_deletion_names}"
-#  for _id in "${!_deletion_ids[@]}"; do
-#    request DELETE "${url}/records/${_id}"
-#  done
-  true
+  depth_count=1
+  next_page="${url}/${zone}/records"
+  debug "Fetching ${next_page}"
+  while [ -n "$next_page" ]; do
+    request GET "${next_page}" ""
+    mapfile -t _deletion_ids < <(<<< "${res}" jq -r '.domain_records[] | select(.name|startswith("'${name}'")) | .id')
+    mapfile -t _deletion_names < <(<<< "${res}" jq -r '.domain_records[] | select(.name|startswith("'${name}'")) | .name')
+    if [[ -n "${_deletion_ids:-}" ]]; then
+      debug "Deleting records with IDs ${_deletion_ids:-} for names ${_deletion_names:-}"
+      for _id in $_deletion_ids; do
+        request DELETE "${url}/${zone}/records/${_id}" ""
+      done
+    fi
+    let depth_count++
+    next_page=$(<<< "${res}" jq -r '.links.pages.next|select(.!=null)')
+    if [[ -n "$next_page" ]] ; then
+      debug "Next page of records at ${next_page}"
+    fi
+  done
 }
 
 exit_hook() {
